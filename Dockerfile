@@ -41,8 +41,10 @@ WORKDIR /app
 FROM base AS deps
 COPY package.json package-lock.json ./
 COPY prisma ./prisma
-RUN --mount=type=cache,target=/root/.npm \
-    npm ci --no-audit --no-fund
+# No BuildKit cache mounts: Railway and similar builders require
+# platform-specific `id=` values there, so plain installs keep the Dockerfile
+# portable.
+RUN npm ci --no-audit --no-fund
 
 # ── Build: Next.js + bundled worker ───────────────────────────────────────────
 FROM deps AS builder
@@ -55,8 +57,7 @@ RUN npx prisma generate \
 FROM base AS prod-deps
 COPY package.json package-lock.json ./
 COPY prisma ./prisma
-RUN --mount=type=cache,target=/root/.npm \
-    npm ci --omit=dev --no-audit --no-fund
+RUN npm ci --omit=dev --no-audit --no-fund
 
 # ── Runtime ───────────────────────────────────────────────────────────────────
 FROM base AS runner
