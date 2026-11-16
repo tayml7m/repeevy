@@ -1,0 +1,186 @@
+name: repurpose-studio
+
+# Zero configuration: `docker compose up -d --build` works on a fresh clone.
+# APP_SECRET is generated into the `secrets` volume on first boot; copy
+# .env.example -> .env only if you want to override defaults.
+#
+# Services: postgres, redis, migrate (one-shot), web (Next.js), worker (24/7).
+# Only `web` publishes a port; everything else stays on the private network.
+
+x-app: &app
+  image: repurpose-studio:local
+  build:
+    context: .
+    dockerfile: Dockerfile
+    target: runner
+  env_file:
+    - path: .env
+      required: false
+  environment:
+    NODE_ENV: production
+    APP_URL: ${APP_URL:-http://localhost:3000}
+    DATABASE_URL: ${DATABASE_URL:-postgresql://repurpose:repurpose@postgres:5432/repurpose?schema=public}
+    REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+    APP_SECRET: ${APP_SECRET:-}
+    CRON_SECRET: ${CRON_SECRET:-}
+    TZ: ${TZ:-UTC}
+    MEDIA_ROOT: ${MEDIA_ROOT:-/data/media}
+    MEDIA_RETENTION_HOURS: ${MEDIA_RETENTION_HOURS:-24}
+    STORAGE_DRIVER: ${STORAGE_DRIVER:-local}
+    MEDIA_BASE_URL: ${MEDIA_BASE_URL:-}
+    S3_ENDPOINT: ${S3_ENDPOINT:-}
+    S3_REGION: ${S3_REGION:-auto}
+    S3_BUCKET: ${S3_BUCKET:-}
+    S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-}
+    S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
+    S3_FORCE_PATH_STYLE: ${S3_FORCE_PATH_STYLE:-false}
+    S3_PUBLIC_BASE_URL: ${S3_PUBLIC_BASE_URL:-}
+    FFMPEG_PATH: ${FFMPEG_PATH:-ffmpeg}
+    FFPROBE_PATH: ${FFPROBE_PATH:-ffprobe}
+    YTDLP_PATH: ${YTDLP_PATH:-yt-dlp}
+    YTDLP_COOKIES_FILE: ${YTDLP_COOKIES_FILE:-}
+  restart: unless-stopped
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: repurpose-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-repurpose}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-repurpose}
+      POSTGRES_DB: ${POSTGRES_DB:-repurpose}
+      TZ: ${TZ:-UTC}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-repurpose} -d ${POSTGRES_DB:-repurpose}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  redis:
+    image: redis:7-alpine
+    container_name: repurpose-redis
+    restart: unless-stopped
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      # BullMQ jobs must never be evicted: no maxmemory policy that drops keys.
+      - --maxmemory-policy
+      - noeviction
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  # One-shot schema migration. web + worker wait for it to exit 0.
+  migrate:
+    <<: *app
+    container_name: repurpose-migrate
+    command: ["npx", "prisma", "migrate", "deploy"]
+    restart: "no"
+    volumes:
+      - secrets:/data/secret
+    healthcheck:
+      disable: true
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  web:
+    <<: *app
+    container_name: repurpose-web
+    command: ["npm", "run", "start"]
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+    volumes:
+      - media:/data/media
+      - secrets:/data/secret
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:3000/api/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      start_period: 60s
+      retries: 5
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  # The 24/7 engine: polling, downloads, FFmpeg jobs, uploads, drip scheduler.
+  worker:
+    <<: *app
+    container_name: repurpose-worker
+    command: ["npm", "run", "worker:prod"]
+    init: true
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: ${DATABASE_URL:-postgresql://repurpose:repurpose@postgres:5432/repurpose?schema=public}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+      APP_URL: ${APP_URL:-http://localhost:3000}
+      APP_SECRET: ${APP_SECRET:-}
+      TZ: ${TZ:-UTC}
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-2}
+      POLL_DEFAULT_INTERVAL_MINUTES: ${POLL_DEFAULT_INTERVAL_MINUTES:-15}
+      MEDIA_ROOT: ${MEDIA_ROOT:-/data/media}
+      MEDIA_RETENTION_HOURS: ${MEDIA_RETENTION_HOURS:-24}
+      STORAGE_DRIVER: ${STORAGE_DRIVER:-local}
+      MEDIA_BASE_URL: ${MEDIA_BASE_URL:-}
+      S3_ENDPOINT: ${S3_ENDPOINT:-}
+      S3_REGION: ${S3_REGION:-auto}
+      S3_BUCKET: ${S3_BUCKET:-}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
+      S3_FORCE_PATH_STYLE: ${S3_FORCE_PATH_STYLE:-false}
+      S3_PUBLIC_BASE_URL: ${S3_PUBLIC_BASE_URL:-}
+      FFMPEG_PATH: ${FFMPEG_PATH:-ffmpeg}
+      FFPROBE_PATH: ${FFPROBE_PATH:-ffprobe}
+      YTDLP_PATH: ${YTDLP_PATH:-yt-dlp}
+      YTDLP_COOKIES_FILE: ${YTDLP_COOKIES_FILE:-}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      TIKTOK_CLIENT_KEY: ${TIKTOK_CLIENT_KEY:-}
+      TIKTOK_CLIENT_SECRET: ${TIKTOK_CLIENT_SECRET:-}
+      INSTAGRAM_APP_ID: ${INSTAGRAM_APP_ID:-}
+      INSTAGRAM_APP_SECRET: ${INSTAGRAM_APP_SECRET:-}
+      FACEBOOK_APP_ID: ${FACEBOOK_APP_ID:-}
+      FACEBOOK_APP_SECRET: ${FACEBOOK_APP_SECRET:-}
+      X_CLIENT_ID: ${X_CLIENT_ID:-}
+      X_CLIENT_SECRET: ${X_CLIENT_SECRET:-}
+      LINKEDIN_CLIENT_ID: ${LINKEDIN_CLIENT_ID:-}
+      LINKEDIN_CLIENT_SECRET: ${LINKEDIN_CLIENT_SECRET:-}
+      SNAPCHAT_CLIENT_ID: ${SNAPCHAT_CLIENT_ID:-}
+      SNAPCHAT_CLIENT_SECRET: ${SNAPCHAT_CLIENT_SECRET:-}
+      DROPBOX_APP_KEY: ${DROPBOX_APP_KEY:-}
+      DROPBOX_APP_SECRET: ${DROPBOX_APP_SECRET:-}
+    volumes:
+      - media:/data/media
+      - secrets:/data/secret
+    # The image healthcheck probes the web port; a worker has no HTTP server.
+    healthcheck:
+      disable: true
+    depends_on:
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    stop_grace_period: 60s
+
+volumes:
+  pgdata:
+  redisdata:
+  # Encrypts OAuth tokens + saved platform secrets. Losing it means reconnecting
+  # accounts; `docker compose down -v` deletes it.
+  secrets:
+  # Shared between web and worker: downloaded sources, processed exports,
+  # intro/outro clips and uploaded SRT files.
+  media:

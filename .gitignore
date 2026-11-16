@@ -1,0 +1,40 @@
+# dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# next.js
+.next/
+out/
+build/
+dist/
+next-env.d.ts
+*.tsbuildinfo
+
+# env & secrets
+.env
+.env.*
+!.env.example
+
+# local media + logs
+/media/
+/data/
+*.log
+logs/
+
+# uploads / temp
+/tmp/
+.tmp/
+
+# os / editors
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# testing
+coverage/
+
+# local smoke-test harness (temporary database)
+.verify/

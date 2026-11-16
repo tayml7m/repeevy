@@ -1,0 +1,504 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// Repurpose Studio — Prisma schema
+//
+// Private, single-tenant design: there is NO User, Session, Account-auth or
+// Billing model anywhere in this schema. Every row belongs to the single owner
+// of the deployment. Access control is handled at the network layer (private
+// URL / VPN / reverse-proxy basic auth), never in the application.
+// ─────────────────────────────────────────────────────────────────────────────
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ── Platform & media vocabulary ───────────────────────────────────────────────
+
+enum Provider {
+  TIKTOK
+  YOUTUBE
+  INSTAGRAM
+  FACEBOOK
+  X
+  LINKEDIN
+  SNAPCHAT
+  GOOGLE_DRIVE
+  DROPBOX
+  PODCAST_RSS
+  GOOGLE // shared OAuth app used by YouTube + Google Drive
+}
+
+enum AuthType {
+  OAUTH
+  MANUAL // pasted access token / RSS URL / cookies file
+  RSS
+}
+
+enum ConnectionStatus {
+  PENDING // created, waiting for OAuth callback
+  ACTIVE
+  EXPIRED // refresh failed / token expired, needs reconnect
+  ERROR
+  DISCONNECTED
+}
+
+enum MediaType {
+  VIDEO // long-form
+  SHORT_VIDEO // short / reel / spotlight
+  STORY
+  PHOTO
+  CAROUSEL
+  AUDIO
+  ANY // source wildcard
+}
+
+enum AutomationMode {
+  AUTO_PUBLISH // detector publishes without human review, 24/7
+  MANUAL_APPROVAL // lands in the staging queue first
+}
+
+enum ContentStatus {
+  DETECTED
+  DOWNLOADING
+  PROCESSING
+  READY // processed + captions rendered, waiting for review
+  SCHEDULED // drip slot reserved
+  PUBLISHING
+  PUBLISHED
+  PARTIAL // some destinations succeeded, some failed
+  FAILED
+  SKIPPED // filtered out or duplicate
+}
+
+enum TargetStatus {
+  PENDING
+  PROCESSING
+  SCHEDULED
+  PUBLISHED
+  FAILED
+  SKIPPED
+}
+
+enum ScheduleMode {
+  IMMEDIATE
+  DRIP
+}
+
+enum PrivacyStatus {
+  PUBLIC
+  UNLISTED
+  PRIVATE
+}
+
+enum AspectRatioMode {
+  SOURCE // keep the source framing
+  PORTRAIT_9_16
+  LANDSCAPE_16_9
+  SQUARE_1_1
+}
+
+enum FillMode {
+  BLUR // blurred background pad
+  CROP // smart center crop
+  PAD // solid colour pad
+}
+
+enum SubtitleMode {
+  NONE
+  BURN_IN // hardsub existing .srt
+  AUTO_TRANSCRIBE // generate .srt (whisper) then hardsub
+}
+
+enum AudioMode {
+  KEEP
+  EXTRACT_MP3 // video -> audio destination
+  WAVEFORM_VIDEO // podcast/mp3 -> waveform video for video destinations
+}
+
+enum AssetKind {
+  INTRO
+  OUTRO
+  SUBTITLE
+  THUMBNAIL
+  AUDIO
+  OUTPUT
+}
+
+enum StorageDriver {
+  LOCAL
+  S3
+}
+
+enum SlotStatus {
+  RESERVED
+  USED
+  RELEASED
+}
+
+enum LogLevel {
+  DEBUG
+  INFO
+  WARN
+  ERROR
+}
+
+enum JobStage {
+  SYSTEM
+  AUTH_REFRESH
+  POLL
+  DEDUPE
+  DOWNLOAD
+  TRANSFORM
+  CAPTION
+  UPLOAD
+  SCHEDULE
+  PUBLISH
+  CLEANUP
+}
+
+// ── Settings ─────────────────────────────────────────────────────────────────
+
+/// Key/value settings store for developer API credentials and system config.
+/// Keys are namespaced, e.g.:
+///   oauth.tiktok     -> { clientKey, clientSecret, redirectUri }
+///   oauth.youtube    -> { clientId, clientSecret }
+///   storage.s3       -> { bucket, region, endpoint, accessKeyId, secretAccessKey }
+///   scheduler.defaults -> { timezone, maxPerDay, times: ["11:00", "18:00"] }
+/// Rows flagged isSecret are encrypted with AES-256-GCM before they hit the DB.
+model AppConfig {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  value       Json
+  isSecret    Boolean  @default(false)
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([isSecret])
+}
+
+// ── Connections ──────────────────────────────────────────────────────────────
+
+/// A single authenticated account on a platform. Tokens are encrypted at rest
+/// (see src/lib/crypto.ts). `metadata` stores provider-specific handles:
+/// Facebook page id, Drive folder id, RSS feed url, TikTok open id, etc.
+model Connection {
+  id             String           @id @default(cuid())
+  provider       Provider
+  label          String
+  authType       AuthType         @default(OAUTH)
+  status         ConnectionStatus @default(PENDING)
+
+  accountId      String? // provider-side stable id
+  accountName    String?
+  username       String?
+  avatarUrl      String?
+  accessToken    String?          @db.Text
+  refreshToken   String?          @db.Text
+  tokenExpiresAt DateTime?
+  scopes         String[]         @default([])
+  metadata       Json?
+
+  canSource      Boolean @default(true)
+  canDestination Boolean @default(true)
+  autoRefresh    Boolean @default(true)
+
+  lastRefreshedAt DateTime?
+  lastCheckedAt   DateTime?
+  lastError       String?   @db.Text
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  sourceWorkflows Workflow[]            @relation("WorkflowSource")
+  destinations    WorkflowDestination[]
+  contentItems    ContentItem[]
+  publishTargets  PublishTarget[]
+  logs            JobLog[]
+
+  @@unique([provider, accountId])
+  @@index([provider, status])
+  // Token-refresh cron scans this index.
+  @@index([status, autoRefresh, tokenExpiresAt])
+}
+
+// ── Workflows ────────────────────────────────────────────────────────────────
+
+/// One source -> many destinations recipe, plus all filters and transforms.
+model Workflow {
+  id          String  @id @default(cuid())
+  name        String
+  description String?
+  isActive    Boolean @default(false)
+
+  // Source
+  sourceConnectionId String
+  sourceConnection   Connection  @relation("WorkflowSource", fields: [sourceConnectionId], references: [id], onDelete: Cascade)
+  sourceMediaType    MediaType   @default(ANY)
+  sourceCollection   String? // Drive folder path, playlist id, RSS url override…
+  pollIntervalMinutes Int        @default(15)
+  lastPolledAt       DateTime?
+  lastPollError      String?     @db.Text
+
+  // Trigger & filters
+  includeHashtags    String[] @default([])
+  excludeHashtags    String[] @default([])
+  includeKeywords    String[] @default([])
+  excludeKeywords    String[] @default([])
+  minDurationSec     Int?
+  maxDurationSec     Int?
+  importBacklog      Boolean  @default(false)
+  backlogImportedAt  DateTime?
+  backlogSince       DateTime?
+
+  // Caption & first-comment rules
+  captionTemplate       String? @db.Text
+  firstCommentTemplate  String? @db.Text
+  captionPrefix         String?
+  captionSuffix         String?
+  stripHashtags         Boolean @default(false)
+  replaceHashtags       String[] @default([])
+  preserveMentions      Boolean @default(true)
+  repurposeFirstComment Boolean @default(false)
+
+  // Video / audio transformation rules
+  aspectRatio         AspectRatioMode @default(SOURCE)
+  fillMode            FillMode        @default(BLUR)
+  trimStartSec        Float?
+  trimEndSec          Float?
+  // Hard cap applied while rendering (distinct from the filter above, which skips a post).
+  trimMaxDurationSec  Int?
+  prependIntroAssetId String?
+  prependIntro        MediaAsset? @relation("IntroAsset", fields: [prependIntroAssetId], references: [id], onDelete: SetNull)
+  appendOutroAssetId  String?
+  appendOutro         MediaAsset? @relation("OutroAsset", fields: [appendOutroAssetId], references: [id], onDelete: SetNull)
+  subtitleMode        SubtitleMode @default(NONE)
+  subtitleAssetId     String?
+  subtitleAsset       MediaAsset?  @relation("SubtitleAsset", fields: [subtitleAssetId], references: [id], onDelete: SetNull)
+  audioMode           AudioMode    @default(KEEP)
+
+  // Automation + drip scheduling
+  mode           AutomationMode @default(MANUAL_APPROVAL)
+  scheduleMode   ScheduleMode   @default(IMMEDIATE)
+  dripMaxPerDay  Int?
+  dripTimes      String[] @default([]) // local "HH:mm" slots, e.g. ["11:00","18:00"]
+  timezone       String   @default("UTC")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  destinations WorkflowDestination[]
+  contentItems ContentItem[]
+  slots        ScheduleSlot[]
+  assets       MediaAsset[]
+  logs         JobLog[]
+
+  @@index([isActive, mode])
+  @@index([isActive, lastPolledAt])
+  @@index([sourceConnectionId])
+}
+
+/// Per-destination overrides for a workflow (1-to-many fan-out lives here).
+model WorkflowDestination {
+  id           String   @id @default(cuid())
+  workflowId   String
+  workflow     Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  connectionId String
+  connection   Connection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  targetMediaType MediaType @default(SHORT_VIDEO)
+  isEnabled       Boolean   @default(true)
+
+  // Destination-specific caption/title rules
+  captionTemplate      String? @db.Text
+  firstCommentTemplate String? @db.Text
+  titleTemplate        String?
+  privacyStatus        PrivacyStatus?
+  categoryId           String? // YouTube category / LinkedIn visibility etc.
+  playlistId           String?
+  folderPath           String? // Drive/Dropbox destination folder
+
+  // Destination-specific media rules
+  aspectRatio    AspectRatioMode?
+  fillMode       FillMode?
+  maxDurationSec Int?
+  extra          Json? // adapter-specific knobs (tags, mentions, page id…)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  targets PublishTarget[]
+
+  @@unique([workflowId, connectionId, targetMediaType])
+  @@index([connectionId])
+}
+
+// ── Detected content ─────────────────────────────────────────────────────────
+
+/// A source post detected for one workflow. The unique pair
+/// (workflowId, sourcePostId) is the strict dedupe guarantee: a post can never
+/// be pulled into the same workflow twice, no matter how often polling runs.
+model ContentItem {
+  id                 String   @id @default(cuid())
+  workflowId         String
+  workflow           Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  sourceConnectionId String
+  sourceConnection   Connection @relation(fields: [sourceConnectionId], references: [id], onDelete: Cascade)
+
+  sourcePostId    String // platform-native id (or RSS guid)
+  sourceUrl       String?  @db.Text
+  sourceCollection String?
+  mediaType       MediaType
+  title           String?
+  caption         String?  @db.Text
+  firstComment    String?  @db.Text
+  hashtags        String[] @default([])
+  thumbnailUrl    String?  @db.Text
+  durationSec     Int?
+  mediaCount      Int      @default(1) // >1 => carousel
+  sourceMedia     Json? // remote asset list: [{ url, type, width, height }]
+  sourcePublishedAt DateTime?
+
+  status       ContentStatus  @default(DETECTED)
+  mode         AutomationMode
+  scheduledFor DateTime?
+  detectedAt   DateTime  @default(now())
+  processedAt  DateTime?
+  publishedAt  DateTime?
+
+  // Per-item overrides captured by the queue UI before re-processing.
+  trimStartSec Float?
+  trimEndSec   Float?
+
+  attemptCount Int     @default(0)
+  lastError    String? @db.Text
+  artifacts    Json? // local/S3 outputs per variant, captions, thumbnails
+  metadata     Json? // raw source payload for re-processing
+
+  targets PublishTarget[]
+  slots   ScheduleSlot[]
+  logs    JobLog[]
+
+  @@unique([workflowId, sourcePostId])
+  @@index([status, detectedAt])
+  @@index([workflowId, status])
+  @@index([scheduledFor])
+  @@index([sourceConnectionId])
+}
+
+/// One row per destination a ContentItem is published to.
+model PublishTarget {
+  id            String              @id @default(cuid())
+  contentItemId String
+  contentItem   ContentItem         @relation(fields: [contentItemId], references: [id], onDelete: Cascade)
+  destinationId String
+  destination   WorkflowDestination @relation(fields: [destinationId], references: [id], onDelete: Cascade)
+  connectionId  String
+  connection    Connection          @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  provider Provider
+  status   TargetStatus @default(PENDING)
+
+  title        String?
+  caption      String? @db.Text
+  firstComment String? @db.Text
+
+  remotePostId String?
+  remoteUrl    String? @db.Text
+  publishedAt  DateTime?
+  attemptCount Int       @default(0)
+  lastError    String?   @db.Text
+  metadata     Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([contentItemId, destinationId])
+  @@index([status])
+  @@index([connectionId, status])
+}
+
+// ── Drip scheduler ───────────────────────────────────────────────────────────
+
+/// Reserved publishing slots. A unique (workflowId, scheduledFor) constraint
+/// stops two items from fighting over the same drip slot; localDate makes the
+/// "max N per day" cap cheap to enforce per workflow timezone.
+model ScheduleSlot {
+  id            String       @id @default(cuid())
+  workflowId    String
+  workflow      Workflow     @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  contentItemId String?
+  contentItem   ContentItem? @relation(fields: [contentItemId], references: [id], onDelete: SetNull)
+
+  scheduledFor DateTime
+  localDate    String // YYYY-MM-DD in the workflow timezone
+  status       SlotStatus @default(RESERVED)
+  createdAt    DateTime   @default(now())
+
+  @@unique([workflowId, scheduledFor])
+  @@index([status, scheduledFor])
+  @@index([workflowId, localDate])
+}
+
+// ── Media assets ─────────────────────────────────────────────────────────────
+
+/// Intro/outro clips, SRT files and generated outputs stored on the shared
+/// media volume or in S3.
+model MediaAsset {
+  id            String        @id @default(cuid())
+  workflowId    String?
+  workflow      Workflow?     @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  kind          AssetKind
+  filename      String
+  storageDriver StorageDriver @default(LOCAL)
+  storageKey    String
+  url           String?       @db.Text
+  mimeType      String?
+  sizeBytes     Int?
+  durationSec   Float?
+  width         Int?
+  height        Int?
+  createdAt     DateTime      @default(now())
+
+  introFor    Workflow[] @relation("IntroAsset")
+  outroFor    Workflow[] @relation("OutroAsset")
+  subtitleFor Workflow[] @relation("SubtitleAsset")
+
+  @@index([workflowId, kind])
+}
+
+// ── Observability ────────────────────────────────────────────────────────────
+
+/// Structured, per-stage job log. Powers /logs and the "View full error trace"
+/// dialog on failed queue items.
+model JobLog {
+  id      String   @id @default(cuid())
+  level   LogLevel @default(INFO)
+  stage   JobStage
+  message String   @db.Text
+
+  workflowId    String?
+  workflow      Workflow?     @relation(fields: [workflowId], references: [id], onDelete: SetNull)
+  contentItemId String?
+  contentItem   ContentItem?  @relation(fields: [contentItemId], references: [id], onDelete: SetNull)
+  connectionId  String?
+  connection    Connection?   @relation(fields: [connectionId], references: [id], onDelete: SetNull)
+  targetId      String?
+
+  queueJobId String? // BullMQ job id
+  attempt    Int?
+  durationMs Int?
+  data       Json?
+  stack      String? @db.Text
+
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([level, createdAt])
+  @@index([contentItemId, createdAt])
+  @@index([workflowId, createdAt])
+  @@index([stage, createdAt])
+}
