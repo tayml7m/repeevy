@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 
+import { probeTikTokProfile } from "@/lib/adapters/tiktok-profile";
 import { prisma } from "@/lib/db";
 import { getValidAccessToken, testConnectionCredentials } from "@/lib/oauth/refresh";
 import { getPlatform } from "@/lib/platforms";
@@ -64,6 +65,62 @@ export async function credentialStatusAction(slug: string): Promise<ActionResult
           : credentials.source === "environment"
             ? "Using credentials from environment variables"
             : "No credentials configured yet",
+    };
+  } catch (error) {
+    return actionError(error);
+  }
+}
+
+/**
+ * Adds a TikTok source that watches a public profile with yt-dlp — no
+ * developer app, OAuth or audit. Used when you post to TikTok yourself.
+ */
+export async function addPublicTikTokProfileAction(input: string): Promise<ActionResult> {
+  try {
+    const probe = await probeTikTokProfile(input);
+    if (!probe.ok || !probe.profileUrl || !probe.username) {
+      return { ok: false, message: probe.detail };
+    }
+
+    const accountId = `public:${probe.username.toLowerCase()}`;
+    const existing = await prisma.connection.findFirst({
+      where: { provider: "TIKTOK", accountId },
+    });
+
+    const data = {
+      provider: "TIKTOK" as const,
+      label: `TikTok · @${probe.username} (public)`,
+      authType: "MANUAL" as const,
+      status: "ACTIVE" as const,
+      accountId,
+      accountName: `@${probe.username}`,
+      username: probe.username,
+      accessToken: null,
+      refreshToken: null,
+      tokenExpiresAt: null,
+      scopes: [],
+      canSource: true,
+      canDestination: false,
+      lastCheckedAt: new Date(),
+      lastRefreshedAt: null,
+      lastError: null,
+      metadata: {
+        mode: "public-profile",
+        profileUrl: probe.profileUrl,
+        username: probe.username,
+      },
+    };
+
+    if (existing) {
+      await prisma.connection.update({ where: { id: existing.id }, data });
+    } else {
+      await prisma.connection.create({ data });
+    }
+
+    revalidateConnections();
+    return {
+      ok: true,
+      message: `Watching ${probe.profileUrl}. ${probe.detail}.`,
     };
   } catch (error) {
     return actionError(error);

@@ -152,6 +152,26 @@ workflow without inventing a second config format.
 
 ## 3. Run it
 
+### TikTok without a developer app (post yourself, detect automatically)
+
+If you publish to TikTok yourself and only want the workflow to pick those videos up and send them
+to YouTube (or anywhere else), you do not need a TikTok developer app, OAuth or an audit:
+
+1. **Connections → TikTok → “Use public profile (no developer app)”**, paste
+   `https://www.tiktok.com/@yourhandle`, and press **Start watching**. The handle is validated
+   immediately with yt-dlp, so a typo fails right away.
+2. **Workflows → New workflow**: source = that TikTok connection, destination = YouTube (plus Drive,
+   Instagram or Facebook if you want). Auto-publish sends each new video straight to YouTube.
+
+The worker polls the public profile, downloads each new video with yt-dlp (watermark-free), renders
+it and publishes. Detection is deduped per workflow, so re-polling never reposts.
+
+Caveats: the account must be **public**, yt-dlp can be rate-limited from datacenter IPs (export
+browser cookies and set `YTDLP_COOKIES_FILE` if polling starts failing), and this mode detects videos
+only — it never logs in to TikTok. The OAuth TikTok source (Display API) remains available for
+private analytics/backlog needs, and TikTok as a *destination* still requires TikTok's audited
+Content Posting API.
+
 ### Option A — Docker Compose (VPS, or any machine with Docker)
 
 ```bash
@@ -265,7 +285,8 @@ Uploads are never retried automatically, so a partial failure can't duplicate a 
 retried per target from the queue UI. `maintenance` runs the poll sweep, drip release, token refresh, media
 retention cleanup and heartbeat (repeat jobs live only on this queue).
 
-Implemented adapters: **TikTok** (Display API source) → **YouTube** (resumable upload, thumbnail,
+Implemented adapters: **TikTok** (Display API source, or public-profile polling with yt-dlp when no
+developer app exists) → **YouTube** (resumable upload, thumbnail,
 first comment), **Google Drive** (resumable backup + caption sidecar), **Instagram** (Reels and
 Stories) and **Facebook Pages** (Reels). Everything else in the catalogue raises a clear
 `UnsupportedProviderError` until its adapter is registered.

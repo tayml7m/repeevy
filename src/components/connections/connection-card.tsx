@@ -28,6 +28,7 @@ import {
 import { Field, Input } from "@/components/ui/field";
 import { StatusBadge } from "@/components/status-badge";
 import {
+  addPublicTikTokProfileAction,
   deleteCredentialsAction,
   disconnectAction,
   refreshTokenAction,
@@ -50,6 +51,8 @@ export type ConnectionSummary = {
   lastError: string | null;
   canSource: boolean;
   canDestination: boolean;
+  authType: string;
+  profileUrl: string | null;
 };
 
 export function ConnectionCard({
@@ -70,6 +73,12 @@ export function ConnectionCard({
   const [dialogOpen, setDialogOpen] = React.useState(false);
   const [clientId, setClientId] = React.useState("");
   const [clientSecret, setClientSecret] = React.useState("");
+  const [profileOpen, setProfileOpen] = React.useState(false);
+  const [profileInput, setProfileInput] = React.useState("");
+  const [profileMessage, setProfileMessage] = React.useState<string | null>(null);
+
+  const isTikTok = platform.slug === "tiktok";
+  const manualProfile = connection?.authType === "MANUAL";
 
   const run = (action: () => Promise<ActionResult>) => {
     setResult(null);
@@ -143,8 +152,13 @@ export function ConnectionCard({
                 </p>
                 <p className="truncate text-[11px] text-muted-foreground">
                   {connection.username ? `@${connection.username} · ` : ""}
-                  token {connection.tokenExpiresAt ? `expires ${formatRelative(connection.tokenExpiresAt)}` : "long-lived"}
+                  {connection.authType === "OAUTH"
+                    ? `token ${connection.tokenExpiresAt ? `expires ${formatRelative(connection.tokenExpiresAt)}` : "long-lived"}`
+                    : "public profile polling (no login)"}
                 </p>
+                {manualProfile && connection.profileUrl ? (
+                  <p className="truncate text-[10px] text-muted-foreground">{connection.profileUrl}</p>
+                ) : null}
               </div>
             </div>
             {connection.lastError ? (
@@ -185,15 +199,31 @@ export function ConnectionCard({
               <ShieldCheck className="size-3.5" aria-hidden />
               Test
             </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={pending}
-              onClick={() => run(() => refreshTokenAction(connection.id))}
-            >
-              <RefreshCw className="size-3.5" aria-hidden />
-              Refresh
-            </Button>
+            {connection.authType === "OAUTH" ? (
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={pending}
+                onClick={() => run(() => refreshTokenAction(connection.id))}
+              >
+                <RefreshCw className="size-3.5" aria-hidden />
+                Refresh
+              </Button>
+            ) : null}
+            {isTikTok && manualProfile ? (
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={pending}
+                onClick={() => {
+                  setProfileMessage(null);
+                  setProfileInput(connection.profileUrl ?? "");
+                  setProfileOpen(true);
+                }}
+              >
+                Change profile
+              </Button>
+            ) : null}
             <Button
               size="sm"
               variant="ghost"
@@ -206,7 +236,7 @@ export function ConnectionCard({
             </Button>
           </div>
         ) : platform.auth === "oauth" ? (
-          <div className="mt-auto">
+          <div className="mt-auto space-y-2">
             <a
               href={`/api/oauth/${platform.slug}/start`}
               className={buttonVariants({ size: "sm", className: "w-full" })}
@@ -214,6 +244,20 @@ export function ConnectionCard({
               <PlugZap className="size-3.5" aria-hidden />
               Connect {platform.label}
             </a>
+            {isTikTok ? (
+              <Button
+                size="sm"
+                variant="outline"
+                className="w-full"
+                onClick={() => {
+                  setProfileMessage(null);
+                  setProfileInput("");
+                  setProfileOpen(true);
+                }}
+              >
+                Use public profile (no developer app)
+              </Button>
+            ) : null}
           </div>
         ) : (
           <p className="mt-auto rounded-xl bg-muted/50 px-3 py-2 text-[11px] leading-relaxed text-muted-foreground">
@@ -342,6 +386,69 @@ export function ConnectionCard({
                 Save credentials
               </Button>
             </div>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={profileOpen} onOpenChange={setProfileOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Watch a public TikTok profile</DialogTitle>
+            <DialogDescription>
+              No developer app, no login, no TikTok audit. The worker lists your newest public videos
+              with yt-dlp, then your workflow downloads and publishes them. The videos must be public.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogBody className="space-y-3">
+            <Field
+              label="Profile URL or @handle"
+              htmlFor="tiktok-profile"
+              hint="e.g. https://www.tiktok.com/@yourhandle"
+            >
+              <Input
+                id="tiktok-profile"
+                value={profileInput}
+                onChange={(event) => setProfileInput(event.target.value)}
+                placeholder="https://www.tiktok.com/@yourhandle"
+                autoComplete="off"
+              />
+            </Field>
+            {profileMessage ? (
+              <p
+                className={`rounded-lg px-2.5 py-1.5 text-[11px] leading-relaxed ${
+                  profileMessage.toLowerCase().includes("watching")
+                    ? "bg-[var(--success)]/10 text-[var(--success)]"
+                    : "bg-[var(--destructive)]/10 text-[var(--destructive)]"
+                }`}
+              >
+                {profileMessage}
+              </p>
+            ) : null}
+            <p className="rounded-xl bg-muted/40 px-3 py-2 text-[11px] leading-relaxed text-muted-foreground">
+              TikTok occasionally rate-limits server IPs. If polling fails, export cookies from a
+              browser and point <span className="font-mono">YTDLP_COOKIES_FILE</span> at them.
+            </p>
+          </DialogBody>
+          <DialogFooter>
+            <Button variant="ghost" size="sm" onClick={() => setProfileOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              disabled={pending || !profileInput.trim()}
+              onClick={() =>
+                startTransition(async () => {
+                  const response = await addPublicTikTokProfileAction(profileInput);
+                  setProfileMessage(response.message);
+                  if (response.ok) {
+                    setProfileOpen(false);
+                    setProfileInput("");
+                  }
+                })
+              }
+            >
+              Start watching
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

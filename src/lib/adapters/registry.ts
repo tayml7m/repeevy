@@ -3,6 +3,7 @@ import type { Connection } from "@prisma/client";
 import { FacebookPageDestination } from "@/lib/adapters/facebook";
 import { GoogleDriveDestination } from "@/lib/adapters/google-drive";
 import { InstagramDestination } from "@/lib/adapters/instagram";
+import { TikTokProfileSource } from "@/lib/adapters/tiktok-profile";
 import { TikTokSourceAdapter } from "@/lib/adapters/tiktok";
 import type { DestinationAdapter, SourceAdapter } from "@/lib/adapters/types";
 import { UnsupportedProviderError } from "@/lib/adapters/types";
@@ -16,7 +17,10 @@ import { YouTubeDestination } from "@/lib/adapters/youtube";
 export function sourceAdapterFor(connection: Connection): SourceAdapter {
   switch (connection.provider) {
     case "TIKTOK":
-      return new TikTokSourceAdapter(connection);
+      // MANUAL connections are public-profile polling: no developer app needed.
+      return connection.authType === "MANUAL"
+        ? new TikTokProfileSource(connection)
+        : new TikTokSourceAdapter(connection);
     default:
       throw new UnsupportedProviderError(connection.provider, "source");
   }

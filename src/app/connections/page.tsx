@@ -55,6 +55,7 @@ export default async function ConnectionsPage({
   const byProvider = new Map<string, ConnectionSummary>();
   for (const connection of connections) {
     if (!byProvider.has(connection.provider)) {
+      const metadata = (connection.metadata ?? {}) as Record<string, unknown>;
       byProvider.set(connection.provider, {
         id: connection.id,
         label: connection.label,
@@ -67,6 +68,9 @@ export default async function ConnectionsPage({
         lastError: connection.lastError,
         canSource: connection.canSource,
         canDestination: connection.canDestination,
+        authType: connection.authType,
+        profileUrl:
+          typeof metadata.profileUrl === "string" ? metadata.profileUrl : null,
       });
     }
   }

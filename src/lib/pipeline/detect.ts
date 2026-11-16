@@ -58,6 +58,16 @@ export async function detectForWorkflow(
     });
     return { detected: 0, filtered: 0, duplicates: 0, ignored: true };
   }
+  if (workflow.sourceConnection.status === "DISCONNECTED") {
+    await logJob({
+      stage: "POLL",
+      level: "DEBUG",
+      message: "Source connection is disconnected — skipping poll",
+      workflowId,
+      queueJobId,
+    });
+    return { detected: 0, filtered: 0, duplicates: 0, ignored: true };
+  }
   if (workflow.destinations.length === 0) {
     await logJob({
       stage: "POLL",
