@@ -70,7 +70,11 @@ export async function downloadHttpFile(url: string, destination: string): Promis
  * yt-dlp rewrites the container extension after merging, so we look for
  * `<base>.<ext>` instead of assuming `.mp4`.
  */
-export async function downloadWithYtDlp(url: string, outputBase: string): Promise<string> {
+export async function downloadWithYtDlp(
+  url: string,
+  outputBase: string,
+  cookiesFile?: string | null,
+): Promise<string> {
   const args = [
     "--no-playlist",
     "--no-warnings",
@@ -86,7 +90,7 @@ export async function downloadWithYtDlp(url: string, outputBase: string): Promis
     url,
   ];
 
-  const cookies = env.YTDLP_COOKIES_FILE;
+  const cookies = cookiesFile || env.YTDLP_COOKIES_FILE;
   if (cookies) args.unshift("--cookies", cookies);
 
   try {
@@ -119,17 +123,18 @@ export async function downloadWithYtDlp(url: string, outputBase: string): Promis
 export async function downloadSourceMedia(
   media: { url: string; kind: "video" | "image" | "audio" },
   destinationBase: string,
+  options: { cookiesFile?: string | null } = {},
 ): Promise<string> {
   if (media.kind === "video") {
     // Platform URLs (TikTok, YouTube…) need yt-dlp for a usable source file.
-    return downloadWithYtDlp(media.url, destinationBase);
+    return downloadWithYtDlp(media.url, destinationBase, options.cookiesFile);
   }
   try {
     return await downloadHttpFile(media.url, `${destinationBase}${guessExtension(media.url)}`);
   } catch (error) {
     // Some hosts block plain HTTP; yt-dlp can still fetch them.
     try {
-      return await downloadWithYtDlp(media.url, destinationBase);
+      return await downloadWithYtDlp(media.url, destinationBase, options.cookiesFile);
     } catch {
       throw error;
     }

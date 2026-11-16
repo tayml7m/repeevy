@@ -22,6 +22,7 @@ import {
   type SourcePost,
 } from "@/lib/adapters/types";
 import { env } from "@/lib/env";
+import { withConnectionCookies, withTempCookies } from "@/lib/media/cookies";
 
 const exec = promisify(execFile);
 const LIST_TIMEOUT_MS = 3 * 60 * 1000;
@@ -154,9 +155,14 @@ export function parseTikTokListing(stdout: string, username: string): TikTokList
   return entries;
 }
 
-async function runYtDlp(profileUrl: string, limit: number): Promise<string> {
+async function runYtDlp(
+  profileUrl: string,
+  limit: number,
+  cookiesFile?: string | null,
+): Promise<string> {
+  const cookies = cookiesFile ?? env.YTDLP_COOKIES_FILE;
   const args = [
-    ...(env.YTDLP_COOKIES_FILE ? ["--cookies", env.YTDLP_COOKIES_FILE] : []),
+    ...(cookies ? ["--cookies", cookies] : []),
     "--no-warnings",
     "--no-progress",
     "--ignore-errors",
@@ -179,17 +185,40 @@ async function runYtDlp(profileUrl: string, limit: number): Promise<string> {
     // --ignore-errors exits non-zero when *some* entries fail; keep usable stdout.
     const withOutput = error as { stdout?: string; stderr?: string };
     if (withOutput.stdout && withOutput.stdout.includes("{")) return withOutput.stdout;
-    const detail = withOutput.stderr?.slice(-2000);
     throw new AdapterError(
-      "TIKTOK: could not list this public profile with yt-dlp",
+      `TIKTOK: could not list this public profile. ${describeYtDlpFailure(withOutput.stderr, error)}`,
       "TIKTOK",
-      detail || (error instanceof Error ? error.message : String(error)),
+      withOutput.stderr?.slice(-2000),
     );
   }
 }
 
+/** Turns yt-dlp stderr into an actionable one-liner (no stack traces in the UI). */
+function describeYtDlpFailure(stderr: string | undefined, error: unknown): string {
+  const text = (stderr ?? "").trim();
+  if (!text) return error instanceof Error ? error.message : String(error);
+
+  const errorLines = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith("ERROR:"));
+  const raw = (errorLines.at(-1) ?? text.split(/\r?\n/).at(-1) ?? "").replace(/^ERROR:\s*/, "");
+  const concise = raw.replace(/\s+/g, " ").slice(0, 220);
+
+  if (/impersonat|parse JSON|challenge|captcha|403|blocked|HTTP Error 5\d\d/i.test(text)) {
+    return `${concise} TikTok is challenging this server. Add a cookies.txt export in the connection dialog, or run the worker from a residential IP.`;
+  }
+  if (/unable to (find|extract) user|user not found|404/i.test(text)) {
+    return `${concise} Check that the handle exists and the account is public.`;
+  }
+  return concise;
+}
+
 /** Validates a profile before a connection row is created. */
-export async function probeTikTokProfile(input: string): Promise<{
+export async function probeTikTokProfile(
+  input: string,
+  cookiesText?: string,
+): Promise<{
   ok: boolean;
   detail: string;
   videos: number;
@@ -198,7 +227,9 @@ export async function probeTikTokProfile(input: string): Promise<{
 }> {
   try {
     const { profileUrl, username } = normalizeTikTokProfile(input);
-    const stdout = await runYtDlp(profileUrl, 3);
+    const stdout = await withTempCookies(cookiesText, (cookiesFile) =>
+      runYtDlp(profileUrl, 3, cookiesFile),
+    );
     const entries = parseTikTokListing(stdout, username);
     if (entries.length === 0) {
       return {
@@ -240,38 +271,42 @@ export class TikTokProfileSource implements SourceAdapter {
   async listRecent(options: SourceListOptions = {}): Promise<SourcePost[]> {
     const { profileUrl, username } = profileFromConnection(this.connection);
     const limit = Math.min(Math.max(options.limit ?? 25, 1), 50);
-    const stdout = await runYtDlp(profileUrl, limit);
-    const entries = parseTikTokListing(stdout, username);
     const since = options.since ?? null;
 
-    return entries
-      .filter((entry) => !since || !entry.publishedAt || entry.publishedAt >= since)
-      .slice(0, limit)
-      .map((entry) => ({
-        id: entry.id,
-        url: entry.pageUrl,
-        mediaType: "short_video",
-        title: entry.caption?.split("\n")[0]?.slice(0, 100),
-        caption: entry.caption ?? "",
-        thumbnailUrl: entry.thumbnailUrl,
-        durationSec: entry.durationSec,
-        publishedAt: entry.publishedAt,
-        media: [{ url: entry.pageUrl, kind: "video" }],
-        raw: {
-          source: "tiktok-public-profile",
-          profileUrl,
-          username,
+    return withConnectionCookies(this.connection.id, async (cookiesFile) => {
+      const stdout = await runYtDlp(profileUrl, limit, cookiesFile);
+      const entries = parseTikTokListing(stdout, username);
+      return entries
+        .filter((entry) => !since || !entry.publishedAt || entry.publishedAt >= since)
+        .slice(0, limit)
+        .map((entry) => ({
           id: entry.id,
-          pageUrl: entry.pageUrl,
-        },
-      }));
+          url: entry.pageUrl,
+          mediaType: "short_video" as const,
+          title: entry.caption?.split("\n")[0]?.slice(0, 100),
+          caption: entry.caption ?? "",
+          thumbnailUrl: entry.thumbnailUrl,
+          durationSec: entry.durationSec,
+          publishedAt: entry.publishedAt,
+          media: [{ url: entry.pageUrl, kind: "video" as const }],
+          raw: {
+            source: "tiktok-public-profile",
+            profileUrl,
+            username,
+            id: entry.id,
+            pageUrl: entry.pageUrl,
+          },
+        }));
+    });
   }
 
   async testConnection(): Promise<AdapterCheck> {
     try {
       const { profileUrl, username } = profileFromConnection(this.connection);
-      const stdout = await runYtDlp(profileUrl, 3);
-      const entries = parseTikTokListing(stdout, username);
+      const entries = await withConnectionCookies(this.connection.id, async (cookiesFile) => {
+        const stdout = await runYtDlp(profileUrl, 3, cookiesFile);
+        return parseTikTokListing(stdout, username);
+      });
       if (entries.length === 0) {
         return {
           ok: false,

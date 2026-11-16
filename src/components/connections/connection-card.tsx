@@ -25,7 +25,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Field, Input } from "@/components/ui/field";
+import { Field, Input, Textarea } from "@/components/ui/field";
 import { StatusBadge } from "@/components/status-badge";
 import {
   addPublicTikTokProfileAction,
@@ -53,6 +53,7 @@ export type ConnectionSummary = {
   canDestination: boolean;
   authType: string;
   profileUrl: string | null;
+  hasCookies: boolean;
 };
 
 export function ConnectionCard({
@@ -75,6 +76,7 @@ export function ConnectionCard({
   const [clientSecret, setClientSecret] = React.useState("");
   const [profileOpen, setProfileOpen] = React.useState(false);
   const [profileInput, setProfileInput] = React.useState("");
+  const [cookiesInput, setCookiesInput] = React.useState("");
   const [profileMessage, setProfileMessage] = React.useState<string | null>(null);
 
   const isTikTok = platform.slug === "tiktok";
@@ -159,6 +161,11 @@ export function ConnectionCard({
                 {manualProfile && connection.profileUrl ? (
                   <p className="truncate text-[10px] text-muted-foreground">{connection.profileUrl}</p>
                 ) : null}
+                {manualProfile && connection.hasCookies ? (
+                  <Badge variant="outline" className="mt-1 text-[10px]">
+                    cookies saved
+                  </Badge>
+                ) : null}
               </div>
             </div>
             {connection.lastError ? (
@@ -217,6 +224,7 @@ export function ConnectionCard({
                 disabled={pending}
                 onClick={() => {
                   setProfileMessage(null);
+                  setCookiesInput("");
                   setProfileInput(connection.profileUrl ?? "");
                   setProfileOpen(true);
                 }}
@@ -251,6 +259,7 @@ export function ConnectionCard({
                 className="w-full"
                 onClick={() => {
                   setProfileMessage(null);
+                  setCookiesInput("");
                   setProfileInput("");
                   setProfileOpen(true);
                 }}
@@ -413,6 +422,21 @@ export function ConnectionCard({
                 autoComplete="off"
               />
             </Field>
+            <Field
+              label="Cookies (optional)"
+              htmlFor="tiktok-cookies"
+              hint="Paste the contents of a Netscape cookies.txt exported from a logged-in browser. Stored encrypted. Leave blank to keep existing cookies."
+            >
+              <Textarea
+                id="tiktok-cookies"
+                value={cookiesInput}
+                onChange={(event) => setCookiesInput(event.target.value)}
+                placeholder="# Netscape HTTP Cookie File…"
+                className="min-h-20 font-mono text-[11px]"
+                autoComplete="off"
+                spellCheck={false}
+              />
+            </Field>
             {profileMessage ? (
               <p
                 className={`rounded-lg px-2.5 py-1.5 text-[11px] leading-relaxed ${
@@ -425,8 +449,10 @@ export function ConnectionCard({
               </p>
             ) : null}
             <p className="rounded-xl bg-muted/40 px-3 py-2 text-[11px] leading-relaxed text-muted-foreground">
-              TikTok occasionally rate-limits server IPs. If polling fails, export cookies from a
-              browser and point <span className="font-mono">YTDLP_COOKIES_FILE</span> at them.
+              TikTok occasionally rate-limits server IPs. Cookies are the fix: export them from a
+              browser where you are logged in and paste them above. The
+              <span className="font-mono"> YTDLP_COOKIES_FILE</span> env var still works as a fallback
+              for YouTube downloads.
             </p>
           </DialogBody>
           <DialogFooter>
@@ -438,7 +464,7 @@ export function ConnectionCard({
               disabled={pending || !profileInput.trim()}
               onClick={() =>
                 startTransition(async () => {
-                  const response = await addPublicTikTokProfileAction(profileInput);
+                  const response = await addPublicTikTokProfileAction(profileInput, cookiesInput);
                   setProfileMessage(response.message);
                   if (response.ok) {
                     setProfileOpen(false);

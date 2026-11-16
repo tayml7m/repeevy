@@ -10,7 +10,8 @@ FROM node:22-bookworm-slim AS base
 ENV NEXT_TELEMETRY_DISABLED=1 \
     PYTHONUNBUFFERED=1 \
     NODE_OPTIONS=--max-old-space-size=2048 \
-    YTDLP_VERSION=latest
+    YTDLP_VERSION=latest \
+    CURL_CFFI_VERSION=0.17.0
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
@@ -20,6 +21,11 @@ RUN apt-get update \
       # libass needs real fonts to burn .srt subtitles.
       fonts-dejavu-core \
       python3 \
+      python3-pip \
+ # TikTok's extractor needs TLS impersonation; yt-dlp uses curl_cffi for that.
+ # Without it, public TikTok profiles fail with a JSON parse error.
+ && python3 -m pip install --break-system-packages --no-cache-dir \
+      "curl_cffi==${CURL_CFFI_VERSION}" \
  && rm -rf /var/lib/apt/lists/* \
  # Standalone yt-dlp build: independent of distro Python packaging and much
  # newer than Debian's, which keeps extractors working. Pin YTDLP_VERSION for

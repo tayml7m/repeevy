@@ -202,6 +202,9 @@ model Connection {
   tokenExpiresAt DateTime?
   scopes         String[]         @default([])
   metadata       Json?
+  /// Encrypted Netscape cookie jar used by yt-dlp when a platform blocks
+  /// server IPs (e.g. TikTok public-profile polling). Never sent to the client.
+  cookieJar      String?          @db.Text
 
   canSource      Boolean @default(true)
   canDestination Boolean @default(true)

@@ -17,6 +17,7 @@ import type {
 
 import type { SourceMedia } from "@/lib/adapters/types";
 import { prisma } from "@/lib/db";
+import { withConnectionCookies } from "@/lib/media/cookies";
 import { downloadHttpFile, downloadSourceMedia } from "@/lib/media/download";
 import {
   audioToWaveformVideo,
@@ -151,20 +152,23 @@ export async function processContentItem(
 
     // 1. Download every source asset.
     const downloads: Array<{ media: SourceMedia; path: string }> = [];
-    for (const [index, media] of sourceMedia.entries()) {
-      const downloaded = await downloadSourceMedia(
-        media,
-        path.join(dir, "sources", `source-${index + 1}`),
-      );
-      downloads.push({ media, path: downloaded });
-      artifacts.sources.push(downloaded);
-      await logJob({
-        ...context,
-        stage: "DOWNLOAD",
-        message: `Downloaded source asset ${index + 1}/${sourceMedia.length}`,
-        data: { kind: media.kind, url: media.url },
-      });
-    }
+    await withConnectionCookies(item.sourceConnectionId, async (cookiesFile) => {
+      for (const [index, media] of sourceMedia.entries()) {
+        const downloaded = await downloadSourceMedia(
+          media,
+          path.join(dir, "sources", `source-${index + 1}`),
+          { cookiesFile },
+        );
+        downloads.push({ media, path: downloaded });
+        artifacts.sources.push(downloaded);
+        await logJob({
+          ...context,
+          stage: "DOWNLOAD",
+          message: `Downloaded source asset ${index + 1}/${sourceMedia.length}`,
+          data: { kind: media.kind, url: media.url },
+        });
+      }
+    });
 
     await prisma.contentItem.update({ where: { id: item.id }, data: { status: "PROCESSING" } });
 

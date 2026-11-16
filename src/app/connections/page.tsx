@@ -71,6 +71,7 @@ export default async function ConnectionsPage({
         authType: connection.authType,
         profileUrl:
           typeof metadata.profileUrl === "string" ? metadata.profileUrl : null,
+        hasCookies: Boolean(connection.cookieJar),
       });
     }
   }

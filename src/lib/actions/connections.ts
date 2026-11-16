@@ -3,7 +3,9 @@
 import { revalidatePath } from "next/cache";
 
 import { probeTikTokProfile } from "@/lib/adapters/tiktok-profile";
+import { encryptSecret } from "@/lib/crypto";
 import { prisma } from "@/lib/db";
+import { normalizeCookieJar } from "@/lib/media/cookies";
 import { getValidAccessToken, testConnectionCredentials } from "@/lib/oauth/refresh";
 import { getPlatform } from "@/lib/platforms";
 import { deleteSetting, getProviderCredentials, writeSetting } from "@/lib/settings";
@@ -75,9 +77,13 @@ export async function credentialStatusAction(slug: string): Promise<ActionResult
  * Adds a TikTok source that watches a public profile with yt-dlp — no
  * developer app, OAuth or audit. Used when you post to TikTok yourself.
  */
-export async function addPublicTikTokProfileAction(input: string): Promise<ActionResult> {
+export async function addPublicTikTokProfileAction(
+  input: string,
+  cookiesText?: string,
+): Promise<ActionResult> {
   try {
-    const probe = await probeTikTokProfile(input);
+    const cookies = cookiesText?.trim() ? normalizeCookieJar(cookiesText) : null;
+    const probe = await probeTikTokProfile(input, cookies ?? undefined);
     if (!probe.ok || !probe.profileUrl || !probe.username) {
       return { ok: false, message: probe.detail };
     }
@@ -109,6 +115,8 @@ export async function addPublicTikTokProfileAction(input: string): Promise<Actio
         profileUrl: probe.profileUrl,
         username: probe.username,
       },
+      // An empty field keeps previously saved cookies; new values replace them.
+      ...(cookies ? { cookieJar: encryptSecret(cookies) } : {}),
     };
 
     if (existing) {
@@ -120,7 +128,7 @@ export async function addPublicTikTokProfileAction(input: string): Promise<Actio
     revalidateConnections();
     return {
       ok: true,
-      message: `Watching ${probe.profileUrl}. ${probe.detail}.`,
+      message: `Watching ${probe.profileUrl}. ${probe.detail}${cookies ? " Cookies saved (encrypted)." : ""}.`,
     };
   } catch (error) {
     return actionError(error);

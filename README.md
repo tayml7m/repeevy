@@ -166,11 +166,15 @@ to YouTube (or anywhere else), you do not need a TikTok developer app, OAuth or 
 The worker polls the public profile, downloads each new video with yt-dlp (watermark-free), renders
 it and publishes. Detection is deduped per workflow, so re-polling never reposts.
 
-Caveats: the account must be **public**, yt-dlp can be rate-limited from datacenter IPs (export
-browser cookies and set `YTDLP_COOKIES_FILE` if polling starts failing), and this mode detects videos
-only — it never logs in to TikTok. The OAuth TikTok source (Display API) remains available for
-private analytics/backlog needs, and TikTok as a *destination* still requires TikTok's audited
-Content Posting API.
+Caveats: the account must be **public**. TikTok challenges some server IPs; when that happens, open
+the connection's **Change profile** dialog, export `cookies.txt` from a browser where you are logged
+in (any “Get cookies.txt” extension) and paste it into the **Cookies** field. It is stored encrypted,
+passed to yt-dlp for both detection and downloads, and never displayed again. `YTDLP_COOKIES_FILE`
+remains a machine-wide fallback for servers that always need cookies. The image bundles `curl_cffi`,
+which yt-dlp needs for TikTok's TLS impersonation — without it TikTok answers with a JSON challenge
+decode error. This mode detects videos only; it never logs in to TikTok. The OAuth TikTok source
+(Display API) remains available for private analytics/backlog needs, and TikTok as a *destination*
+still requires TikTok's audited Content Posting API.
 
 ### Option A — Docker Compose (VPS, or any machine with Docker)
 
@@ -316,7 +320,7 @@ when Postgres is not reachable yet.
 | `/`            | Counts by status, drip slots, last-24h publishes, recent detections, runtime warnings, recent errors.             |
 | `/queue`       | Thumbnail cards (hover to enlarge, click for full size), search + hashtag/status/workflow filters, pagination.     |
 | `/queue` item  | Publish now, edit title/caption (pushed to every unpublished target), trim start/end, re-run, full error trace.     |
-| `/connections` | Saved Client IDs/secrets per platform (encrypted), OAuth connect, test, refresh token, disconnect.                 |
+| `/connections` | Saved Client IDs/secrets per platform (encrypted), OAuth connect, test, refresh token, disconnect, public TikTok profiles + cookie jars. |
 | `/workflows`   | 1-to-many builder: source → filters → media/caption rules → destinations, with per-destination overrides.          |
 | `/workflows`   | Toggle active, run poll now, delete; edit page also uploads intro/outro/SRT assets per workflow.                   |
 | `/schedule`    | Per-workflow immediate vs drip mode, HH:mm slots, max/day, timezone, upcoming reserved slots.                      |
@@ -326,7 +330,8 @@ when Postgres is not reachable yet.
 
 - No auth, no users, no cookies, no session table: the URL *is* the capability. Put it behind
   Cloudflare Access / Tailscale / an nginx `auth_basic` block if the host is publicly reachable.
-- OAuth tokens and API secrets are AES-256-GCM encrypted with a scrypt-derived key from `APP_SECRET`.
+- OAuth tokens, API secrets and per-connection yt-dlp cookie jars are AES-256-GCM encrypted with a
+  scrypt-derived key from `APP_SECRET`.
   Rotating `APP_SECRET` (or `docker compose down -v`, which deletes the `secrets` volume) makes
   stored tokens unreadable — reconnect accounts afterwards. Back up the `secrets` volume if you care
   about not reconnecting.
