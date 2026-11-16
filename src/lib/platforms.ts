@@ -86,7 +86,8 @@ export const PLATFORMS: PlatformDefinition[] = [
     scopes: ["instagram_basic", "instagram_content_publish", "pages_show_list", "pages_read_engagement", "business_management"],
     callbackPath: "/api/oauth/meta/callback",
     docsUrl: "https://developers.facebook.com/docs/instagram-platform/content-publishing",
-    notes: "Requires a Business/Creator account linked to a Facebook Page.",
+    notes:
+      "Requires a Business/Creator account linked to a Facebook Page. Reels and Stories upload straight from disk via Meta's resumable upload (Facebook Login for Business).",
     accent: "#E1306C",
   },
   {
@@ -102,6 +103,7 @@ export const PLATFORMS: PlatformDefinition[] = [
     scopes: ["pages_show_list", "pages_read_engagement", "pages_manage_posts", "publish_video"],
     callbackPath: "/api/oauth/meta/callback",
     docsUrl: "https://developers.facebook.com/docs/video-api/guides/reels-publishing",
+    notes: "Publishes Reels (3–90 s) to a Page you administer; needs the CREATE_CONTENT task on that Page.",
     accent: "#1877F2",
   },
   {

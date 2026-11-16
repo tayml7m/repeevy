@@ -230,10 +230,17 @@ over env values and are encrypted with `APP_SECRET`.
 | Dropbox       | `{APP_URL}/api/oauth/dropbox/callback`          | `DROPBOX_APP_KEY`, `DROPBOX_APP_SECRET`     |
 | Podcast RSS   | — (paste feed URL)                              | —                                          |
 
-Notes that matter in practice: TikTok direct publish needs an audited Content Posting app;
-Instagram publishing requires a Business/Creator account linked to a Facebook Page; YouTube uploads
-use a resumable session with a 3-minute/9:16 rule for Shorts; Google Drive uses `drive.file` so the
-app only sees files it created or folders you explicitly grant.
+Notes that matter in practice: TikTok direct publish needs an audited Content Posting app; Instagram
+publishing requires a Business/Creator account linked to a Facebook Page (and a Facebook Login for
+Business configuration for resumable uploads); Facebook Reels need a Page you administer and 3–90 s
+vertical video; YouTube uploads use a resumable session with a 3-minute/9:16 rule for Shorts;
+Google Drive uses `drive.file` so the app only sees files it created or folders you explicitly grant.
+
+Every platform above is free to set up with your own developer account. What is *not* possible for a
+private self-hosted app: TikTok public posting (unaudited apps are draft/private-only and app review
+excludes personal-use apps) and Snapchat (its Public Profile API is allowlisted to business partners).
+A hosted publishing API such as Upload-Post or Ayrshare is the only way to bypass those two
+approvals, at a monthly cost.
 
 ---
 
@@ -258,10 +265,24 @@ Uploads are never retried automatically, so a partial failure can't duplicate a 
 retried per target from the queue UI. `maintenance` runs the poll sweep, drip release, token refresh, media
 retention cleanup and heartbeat (repeat jobs live only on this queue).
 
-Implemented adapters in this phase: **TikTok** (Display API source) → **YouTube** (resumable
-upload, thumbnail, first comment) and **Google Drive** (resumable backup + caption sidecar).
-Other platforms in the catalogue raise a clear `UnsupportedProviderError` until their adapter
-is registered.
+Implemented adapters: **TikTok** (Display API source) → **YouTube** (resumable upload, thumbnail,
+first comment), **Google Drive** (resumable backup + caption sidecar), **Instagram** (Reels and
+Stories) and **Facebook Pages** (Reels). Everything else in the catalogue raises a clear
+`UnsupportedProviderError` until its adapter is registered.
+
+Both Meta destinations upload straight from the local file — no public media URL or S3 bucket is
+needed:
+
+- **Instagram** creates a resumable container (`upload_type=resumable`), streams the MP4 to
+  `rupload.facebook.com`, waits for `status_code=FINISHED`, then calls `media_publish`. It needs a
+  Business/Creator account linked to a Facebook Page and the `instagram_content_publish` scope.
+  Meta documents resumable uploads for apps using **Facebook Login for Business**.
+- **Facebook Pages** uses the three-phase Reels API (`video_reels` start → binary upload → finish
+  with `video_state=PUBLISHED`). Facebook only accepts Reels here: 3–90 s, 9:16, and the user needs
+  the `CREATE_CONTENT` task on the Page. Long-form targets are rejected with an explicit error.
+
+When a Page has several Instagram accounts or a user administers several Pages, set the workflow
+destination's account field (page id, page name or `@username`) — the adapter refuses to guess.
 
 ## 6. UI (Phase 5)
 
@@ -297,9 +318,10 @@ when Postgres is not reachable yet.
 
 ## 8. Roadmap
 
-Phases 1–5 are complete. Natural next steps: more source/destination adapters (the registry raises
-`UnsupportedProviderError` for everything not yet implemented), an S3/R2 storage driver, and
-per-destination queues with independent concurrency.
+Phases 1–5 are complete, with free Meta destinations (Instagram Reels/Stories, Facebook Page Reels)
+added on top. Natural next steps: LinkedIn, X and Pinterest adapters (each with its own free
+developer app and, for video, API access review); an optional hosted-publishing-API adapter for
+TikTok/Snapchat; an S3/R2 storage driver; and per-destination queues with independent concurrency.
 
 Storage note: the pipeline writes to the shared media volume (`STORAGE_DRIVER=local`). The S3/R2
 driver is reserved for the settings UI; selecting it today fails fast with an explanatory error.

@@ -759,24 +759,51 @@ export function WorkflowBuilder({
                               ))}
                             </Select>
                           </Field>
-                          <Field label="Privacy" htmlFor={`privacy-${connection.id}`}>
-                            <Select
-                              id={`privacy-${connection.id}`}
-                              value={selected.privacyStatus ?? ""}
-                              onChange={(event) =>
-                                updateDestination(connection.id, {
-                                  privacyStatus: event.target.value || null,
-                                })
+                          {connection.provider !== "INSTAGRAM" && connection.provider !== "FACEBOOK" ? (
+                            <Field label="Privacy" htmlFor={`privacy-${connection.id}`}>
+                              <Select
+                                id={`privacy-${connection.id}`}
+                                value={selected.privacyStatus ?? ""}
+                                onChange={(event) =>
+                                  updateDestination(connection.id, {
+                                    privacyStatus: event.target.value || null,
+                                  })
+                                }
+                              >
+                                {PRIVACY_OPTIONS.map((option) => (
+                                  <option key={option.value} value={option.value}>
+                                    {option.label}
+                                  </option>
+                                ))}
+                              </Select>
+                            </Field>
+                          ) : null}
+                          {connection.provider === "FACEBOOK" || connection.provider === "INSTAGRAM" ? (
+                            <Field
+                              label={
+                                connection.provider === "FACEBOOK"
+                                  ? "Page (optional)"
+                                  : "Instagram account (optional)"
+                              }
+                              htmlFor={`account-${connection.id}`}
+                              hint={
+                                connection.provider === "FACEBOOK"
+                                  ? "Page id or name. Leave blank when you only administer one Page."
+                                  : "@username or Page id. Leave blank when only one account is linked."
                               }
                             >
-                              {PRIVACY_OPTIONS.map((option) => (
-                                <option key={option.value} value={option.value}>
-                                  {option.label}
-                                </option>
-                              ))}
-                            </Select>
-                          </Field>
-                          {connection.provider === "GOOGLE_DRIVE" || connection.provider === "DROPBOX" ? (
+                              <Input
+                                id={`account-${connection.id}`}
+                                value={selected.folderPath ?? ""}
+                                onChange={(event) =>
+                                  updateDestination(connection.id, {
+                                    folderPath: event.target.value || null,
+                                  })
+                                }
+                                placeholder={connection.provider === "FACEBOOK" ? "My Page" : "@studio"}
+                              />
+                            </Field>
+                          ) : connection.provider === "GOOGLE_DRIVE" || connection.provider === "DROPBOX" ? (
                             <Field
                               label="Folder id or URL"
                               htmlFor={`folder-${connection.id}`}

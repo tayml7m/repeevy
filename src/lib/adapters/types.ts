@@ -96,7 +96,7 @@ export class AdapterError extends Error {
 export class UnsupportedProviderError extends AdapterError {
   constructor(provider: string, role: "source" | "destination") {
     super(
-      `${provider} is not available as a ${role} yet. This build ships complete TikTok (source), YouTube and Google Drive (destination) adapters.`,
+      `${provider} is not available as a ${role} yet. This build ships TikTok (source) plus YouTube, Google Drive, Instagram and Facebook Pages (destination) adapters.`,
       provider,
     );
     this.name = "UnsupportedProviderError";

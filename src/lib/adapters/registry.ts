@@ -1,6 +1,8 @@
 import type { Connection } from "@prisma/client";
 
+import { FacebookPageDestination } from "@/lib/adapters/facebook";
 import { GoogleDriveDestination } from "@/lib/adapters/google-drive";
+import { InstagramDestination } from "@/lib/adapters/instagram";
 import { TikTokSourceAdapter } from "@/lib/adapters/tiktok";
 import type { DestinationAdapter, SourceAdapter } from "@/lib/adapters/types";
 import { UnsupportedProviderError } from "@/lib/adapters/types";
@@ -26,6 +28,10 @@ export function destinationAdapterFor(connection: Connection): DestinationAdapte
       return new YouTubeDestination(connection);
     case "GOOGLE_DRIVE":
       return new GoogleDriveDestination(connection);
+    case "INSTAGRAM":
+      return new InstagramDestination(connection);
+    case "FACEBOOK":
+      return new FacebookPageDestination(connection);
     default:
       throw new UnsupportedProviderError(connection.provider, "destination");
   }
@@ -33,7 +39,7 @@ export function destinationAdapterFor(connection: Connection): DestinationAdapte
 
 export const IMPLEMENTED = {
   sources: ["TIKTOK"],
-  destinations: ["YOUTUBE", "GOOGLE_DRIVE"],
+  destinations: ["YOUTUBE", "GOOGLE_DRIVE", "INSTAGRAM", "FACEBOOK"],
 } as const;
 
 export function isSourceImplemented(provider: string): boolean {
