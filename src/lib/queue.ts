@@ -33,7 +33,14 @@ export type JobPayloadMap = {
   [QUEUES.MAINTENANCE]: MaintenanceJob;
 };
 
-/** Deterministic BullMQ job id so a post can never be queued twice. */
+/**
+ * Deterministic BullMQ job id so a post can never be queued twice.
+ *
+ * BullMQ rejects custom ids that contain ":" (its Redis key separator) with
+ * "Custom Id cannot contain :", so segments are joined with "-". The "job-"
+ * prefix also keeps the id from being purely numeric, which BullMQ refuses as
+ * well ("Custom Id cannot be integers").
+ */
 export function jobId(...parts: Array<string | number>): string {
-  return parts.join(":").replace(/[^a-zA-Z0-9:_-]/g, "_");
+  return `job-${parts.join("-").replace(/[^a-zA-Z0-9_-]/g, "_")}`;
 }

@@ -93,7 +93,7 @@ export async function enqueueProcess(
     {
       // Unique id so a re-run always executes; short TTL dedupe stops bursts.
       jobId: jobId("process", contentItemId, Date.now()),
-      deduplication: { id: `process:${contentItemId}`, ttl: 30_000 },
+      deduplication: { id: jobId("dedupe-process", contentItemId), ttl: 30_000 },
       attempts: 2,
     },
   );
@@ -110,7 +110,7 @@ export async function enqueuePublish(
     { contentItemId },
     {
       jobId: jobId("publish", contentItemId, Date.now()),
-      deduplication: { id: `publish:${contentItemId}`, ttl: 30_000 },
+      deduplication: { id: jobId("dedupe-publish", contentItemId), ttl: 30_000 },
       // Do not retry automatically: a partial upload must not duplicate posts.
       attempts: 1,
     },
